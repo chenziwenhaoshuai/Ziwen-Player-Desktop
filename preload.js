@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('api', {
   saveRecentWatch: (item) => ipcRenderer.invoke('settings:recent-save', item),
   clearRecentWatches: () => ipcRenderer.invoke('settings:recent-clear'),
   clearCache: () => ipcRenderer.invoke('cache:clear'),
+  getCacheInfo: () => ipcRenderer.invoke('cache:info'),
+  chooseCacheDir: () => ipcRenderer.invoke('cache:choose-dir'),
 
   // App
   getVersion: () => ipcRenderer.invoke('app:version'),

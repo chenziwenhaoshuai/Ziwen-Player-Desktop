@@ -10,7 +10,7 @@
  *  4. 监听 resolver 分区的网络请求，捕获 m3u8 播放地址
  */
 
-const { app, BrowserWindow, ipcMain, session, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, session, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -19,6 +19,7 @@ const os = require('os');
 const { SiteClient } = require('./lib/site-client');
 const { request } = require('./lib/http');
 const { fernetDecrypt } = require('./lib/fernet');
+const { DiskCache } = require('./lib/cache');
 const {
   GITHUB_UPDATE_API_URL,
   GITEE_UPDATE_API_URL,
@@ -37,12 +38,56 @@ const DEFAULT_SETTINGS = {
   autoUpdateCheck: false,
   lastAutoUpdateCheck: 0,
   recentWatches: [],
+  cacheDir: '',
 };
+
+const VIDEO_CACHE_MAX_BYTES = 1024 * 1024 * 1024; // 1GB
 
 let settings = null;
 let mainWindow = null;
 let proxyServer = null;
 let proxyBase = '';
+let videoCache = null;
+
+function defaultCacheDir() {
+  return path.join(app.getPath('userData'), 'video_cache');
+}
+
+function currentCacheDir() {
+  return settings && settings.cacheDir ? settings.cacheDir : defaultCacheDir();
+}
+
+function ensureCache() {
+  const dir = currentCacheDir();
+  if (!videoCache || videoCache.dir !== dir) {
+    videoCache = new DiskCache(dir, VIDEO_CACHE_MAX_BYTES);
+  }
+  return videoCache;
+}
+
+function formatBytes(bytes) {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return (bytes / 1024 / 1024 / 1024).toFixed(2) + 'GB';
+  }
+  if (bytes >= 1024 * 1024) {
+    return (bytes / 1024 / 1024).toFixed(1) + 'MB';
+  }
+  if (bytes >= 1024) {
+    return (bytes / 1024).toFixed(1) + 'KB';
+  }
+  return bytes + 'B';
+}
+
+function cacheInfo() {
+  const cache = ensureCache();
+  return {
+    dir: cache.dir,
+    size: cache.size(),
+    maxBytes: VIDEO_CACHE_MAX_BYTES,
+    sizeLabel: formatBytes(cache.size()),
+    maxLabel: formatBytes(VIDEO_CACHE_MAX_BYTES),
+  };
+}
 
 function settingsFile() {
   return path.join(app.getPath('userData'), 'settings.json');
@@ -169,7 +214,15 @@ async function handleProxy(req, res) {
 
     // Encrypted peach image (served as a Fernet token).
     if (/\.image($|\?)/i.test(url)) {
-      const decoded = decodeEncryptedImage(upstream.body.toString('utf8'));
+      const cache = ensureCache();
+      let decoded;
+      const hit = cache.get(url);
+      if (hit) {
+        decoded = { mime: hit.contentType || 'image/jpeg', buffer: hit.data };
+      } else {
+        decoded = decodeEncryptedImage(upstream.body.toString('utf8'));
+        cache.put(url, decoded.buffer, decoded.mime);
+      }
       res.writeHead(
         200,
         withCors({
@@ -192,10 +245,26 @@ async function handleProxy(req, res) {
     }
 
     // Binary passthrough (video segment, mp4, flv, webm, normal image).
+    // Full (non-range) responses are cached to disk for faster re-watching;
+    // range requests (e.g. mp4 seeking) bypass the cache.
+    const isRange = !!req.headers.range;
+    let data = upstream.body;
+    let contentType = upstream.headers['content-type'] || 'application/octet-stream';
+    if (!isRange) {
+      const cache = ensureCache();
+      const hit = cache.get(url);
+      if (hit) {
+        data = hit.data;
+        contentType = hit.contentType || contentType;
+      } else {
+        cache.put(url, upstream.body, contentType);
+      }
+    }
+
     const status = upstream.statusCode === 206 ? 206 : 200;
     const headers = {
-      'Content-Type': upstream.headers['content-type'] || 'application/octet-stream',
-      'Content-Length': upstream.body.length,
+      'Content-Type': contentType,
+      'Content-Length': data.length,
     };
     if (upstream.statusCode === 206 && upstream.headers['content-range']) {
       headers['Content-Range'] = upstream.headers['content-range'];
@@ -204,7 +273,7 @@ async function handleProxy(req, res) {
       headers['Accept-Ranges'] = upstream.headers['accept-ranges'];
     }
     res.writeHead(status, withCors(headers));
-    res.end(upstream.body);
+    res.end(data);
   } catch (e) {
     res.writeHead(502, withCors({ 'Content-Type': 'text/plain; charset=utf-8' }));
     res.end('proxy error: ' + (e && e.message ? e.message : String(e)));
@@ -317,9 +386,34 @@ function registerIpc() {
     return info;
   });
 
+  ipcMain.handle('cache:info', () => {
+    return cacheInfo();
+  });
+
+  ipcMain.handle('cache:choose-dir', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '选择缓存目录',
+      defaultPath: currentCacheDir(),
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (result.canceled || !result.filePaths || !result.filePaths.length) {
+      return null;
+    }
+    const dir = result.filePaths[0];
+    settings = { ...settings, cacheDir: dir };
+    saveSettings();
+    videoCache = null; // recreate with the new directory
+    return cacheInfo();
+  });
+
   ipcMain.handle('cache:clear', async () => {
-    await session.defaultSession.clearCache();
-    return true;
+    ensureCache().clear();
+    try {
+      await session.defaultSession.clearCache();
+    } catch (e) {
+      // ignore
+    }
+    return cacheInfo();
   });
 
   ipcMain.handle('shell:open-external', (_evt, url) => {

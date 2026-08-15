@@ -538,9 +538,12 @@ async function showSettings() {
     '<button id="preload-dec" class="btn">减少</button>' +
     '<button id="preload-inc" class="btn">增加</button>' +
     '</div>' +
-    '<div class="info-box" id="cache-info">视频缓存：由系统自动管理</div>' +
-    '<div class="help-text">视频缓存用于提前保存 m3u8 切片，浏览器的临时缓存会由系统自动清理。</div>' +
+    '<div class="info-box" id="cache-info">视频缓存：加载中...</div>' +
+    '<div class="help-text" id="cache-dir">缓存目录：加载中...</div>' +
+    '<div class="settings-row">' +
+    '<button id="cache-choose" class="btn">更改缓存目录</button>' +
     '<button id="cache-clear" class="btn">清理视频缓存</button>' +
+    '</div>' +
     '<div style="height:14px"></div>' +
     '<button id="history-clear" class="btn">清除历史浏览记录</button>' +
     '<div style="height:14px"></div>' +
@@ -561,11 +564,14 @@ async function showSettings() {
   document.getElementById('preload-dec').addEventListener('click', () => changePreload(-1));
   document.getElementById('preload-inc').addEventListener('click', () => changePreload(1));
   document.getElementById('cache-clear').addEventListener('click', clearCache);
+  document.getElementById('cache-choose').addEventListener('click', chooseCacheDir);
   document.getElementById('history-clear').addEventListener('click', clearHistory);
   document.getElementById('beta-toggle').addEventListener('click', toggleBetaMode);
   document.getElementById('check-github').addEventListener('click', () => checkUpdate('github'));
   document.getElementById('check-gitee').addEventListener('click', () => checkUpdate('gitee'));
   document.getElementById('auto-update').addEventListener('click', toggleAutoUpdate);
+
+  updateCacheInfo();
 }
 
 function updatePreloadInfo() {
@@ -587,10 +593,39 @@ async function changePreload(dir) {
 async function clearCache() {
   showLoading('正在清理缓存...');
   try {
-    await window.api.clearCache();
+    const info = await window.api.clearCache();
     hideLoading('缓存已清理');
+    applyCacheInfo(info);
   } catch (e) {
     hideLoading('清理缓存失败');
+  }
+}
+
+function applyCacheInfo(info) {
+  const infoEl = document.getElementById('cache-info');
+  const dirEl = document.getElementById('cache-dir');
+  if (infoEl && info) {
+    infoEl.textContent = '视频缓存：' + info.sizeLabel + ' / ' + info.maxLabel;
+  }
+  if (dirEl && info) {
+    dirEl.textContent = '缓存目录：' + info.dir;
+  }
+}
+
+async function updateCacheInfo() {
+  try {
+    const info = await window.api.getCacheInfo();
+    applyCacheInfo(info);
+  } catch (e) {
+    // ignore
+  }
+}
+
+async function chooseCacheDir() {
+  const info = await window.api.chooseCacheDir();
+  if (info) {
+    applyCacheInfo(info);
+    showHint('缓存目录已更改为：' + info.dir);
   }
 }
 
