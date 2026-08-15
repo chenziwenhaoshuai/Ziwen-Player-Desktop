@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>子文播放器</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="vendor/hls.min.js"></script>
+</head>
+<body>
+  <div id="app" class="app">
+    <aside id="nav-rail" class="nav-rail"></aside>
+    <main id="content" class="content"></main>
+  </div>
+
+  <!-- hidden host for the resolver webview -->
+  <div id="webview-host" aria-hidden="true"></div>
+
+  <div id="loading" class="loading hidden">
+    <div class="spinner"></div>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
