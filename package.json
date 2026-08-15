@@ -1,0 +1,44 @@
+{
+  "name": "ziwen-player",
+  "productName": "Ziwen-Player",
+  "version": "1.0.22",
+  "description": "子文播放器 Windows 桌面版（由 Android TV 版移植）",
+  "main": "main.js",
+  "author": "chenziwenhaoshuai",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "dependencies": {
+    "hls.js": "^1.5.13"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.yfvod.tv.ziwenplayer",
+    "productName": "Ziwen-Player",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib/**/*",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "portable": {
+      "artifactName": "Ziwen-Player-${version}.exe"
+    }
+  }
+}
