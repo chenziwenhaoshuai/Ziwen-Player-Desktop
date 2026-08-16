@@ -13,7 +13,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::image::Image;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 use cache::{DiskCache, CACHE_MAX_BYTES};
 use http_client::new_client;
@@ -26,7 +28,7 @@ use site_client::{
 // ---- Settings ---------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub preload_minutes: i32,
     pub beta_mode: bool,
@@ -34,6 +36,8 @@ pub struct Settings {
     pub last_auto_update_check: i64,
     pub recent_watches: Vec<VideoItem>,
     pub cache_dir: String,
+    pub boss_margin: f64,
+    pub boss_delay_ms: f64,
 }
 
 impl Default for Settings {
@@ -45,6 +49,8 @@ impl Default for Settings {
             last_auto_update_check: 0,
             recent_watches: Vec::new(),
             cache_dir: String::new(),
+            boss_margin: 80.0,
+            boss_delay_ms: 450.0,
         }
     }
 }
@@ -269,6 +275,83 @@ fn open_external(url: String) -> bool {
 }
 
 #[tauri::command]
+fn hide_window(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+}
+
+#[tauri::command]
+fn show_window(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// Returns true when the global cursor is still within the window's bounds
+/// expanded by `margin` physical pixels. Used by boss mode so that moving the
+/// mouse onto the title bar / resize border (to drag or resize) doesn't count
+/// as "leaving" the window.
+#[tauri::command]
+fn cursor_near_window(app: AppHandle, margin: f64) -> bool {
+    let Some(window) = app.get_webview_window("main") else {
+        return false;
+    };
+    let Ok(pos) = window.inner_position() else {
+        return false;
+    };
+    let Ok(size) = window.inner_size() else {
+        return false;
+    };
+    // cursor_position() returns the GLOBAL screen coordinates; make it
+    // relative to the window's client area before comparing.
+    let Ok(cursor) = window.cursor_position() else {
+        return false;
+    };
+    let x = cursor.x - pos.x as f64;
+    let y = cursor.y - pos.y as f64;
+    let w = size.width as f64;
+    let h = size.height as f64;
+    x >= -margin && x <= w + margin && y >= -margin && y <= h + margin
+}
+
+/// Shows a transparent border overlay around the main window so the user can
+/// visually see the boss-mode boundary while adjusting it.
+#[tauri::command]
+fn preview_boundary(app: AppHandle, margin: f64) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Some(preview) = app.get_webview_window("boundary-preview") else {
+        return;
+    };
+    let Ok(pos) = window.outer_position() else {
+        return;
+    };
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+    let m = margin.round() as i32;
+    let _ = preview.set_position(tauri::PhysicalPosition::new(pos.x - m, pos.y - m));
+    let _ = preview.set_size(tauri::PhysicalSize::new(
+        size.width + 2 * m as u32,
+        size.height + 2 * m as u32,
+    ));
+    let _ = preview.set_ignore_cursor_events(true);
+    let _ = preview.show();
+    let _ = window.set_focus();
+}
+
+#[tauri::command]
+fn hide_boundary_preview(app: AppHandle) {
+    if let Some(preview) = app.get_webview_window("boundary-preview") {
+        let _ = preview.hide();
+    }
+}
+
+#[tauri::command]
 async fn get_cache_info(state: State<'_, AppState>) -> Result<CacheInfo, String> {
     let dir = state.cache_dir.read().unwrap().clone();
     match tauri::async_runtime::spawn_blocking(move || {
@@ -324,6 +407,65 @@ pub fn run() {
             let cache_dir = std::sync::Arc::new(RwLock::new(cache_dir));
             let proxy_port = start_proxy(client.clone(), cache_dir.clone());
 
+            // System tray icon: clicking it restores the hidden window (boss mode).
+            let tray_icon = app.default_window_icon().cloned().unwrap_or_else(|| {
+                // Fallback: 32x32 solid gold square.
+                let mut rgba = vec![0u8; 32 * 32 * 4];
+                for px in rgba.chunks_mut(4) {
+                    px[0] = 247;
+                    px[1] = 200;
+                    px[2] = 67;
+                    px[3] = 255;
+                }
+                Image::new_owned(rgba, 32, 32)
+            });
+            match TrayIconBuilder::with_id("main-tray")
+                .icon(tray_icon)
+                .tooltip("子文播放器")
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build(app)
+            {
+                Ok(tray) => {
+                    // Keep the tray handle alive for the whole app lifetime.
+                    app.manage(tray);
+                }
+                Err(e) => {
+                    eprintln!("failed to create tray icon: {e}");
+                }
+            }
+
+            // Boundary preview overlay (transparent border shown around the
+            // window while adjusting the boss-mode margin).
+            let _ = WebviewWindowBuilder::new(
+                app,
+                "boundary-preview",
+                WebviewUrl::App("preview.html".into()),
+            )
+            .transparent(true)
+            .decorations(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .resizable(false)
+            .maximizable(false)
+            .minimizable(false)
+            .closable(false)
+            .visible(false)
+            .build();
+
             app.manage(AppState {
                 client,
                 settings: Mutex::new(settings),
@@ -346,7 +488,12 @@ pub fn run() {
             check_update,
             open_external,
             get_cache_info,
-            clear_cache
+            clear_cache,
+            hide_window,
+            show_window,
+            cursor_near_window,
+            preview_boundary,
+            hide_boundary_preview
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

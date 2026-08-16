@@ -444,6 +444,30 @@ body {
   background: var(--accent);
   color: var(--accent-text);
 }
+.player-top-btn {
+  pointer-events: auto;
+  flex: 0 0 auto;
+  height: 42px;
+  padding: 0 18px;
+  background: rgba(24, 30, 39, 0.9);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  font-size: 15px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.player-topbar:not(.visible) .player-top-btn {
+  pointer-events: none;
+}
+.player-top-btn:hover {
+  background: var(--panel-2);
+}
+.player-top-btn.active {
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
 .player-title {
   flex: 1;
   min-width: 0;

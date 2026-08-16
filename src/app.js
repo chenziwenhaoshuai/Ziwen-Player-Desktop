@@ -28,6 +28,11 @@ const api = {
   getProxyBase: () => tauriInvoke('get_proxy_base'),
   checkUpdate: (source) => tauriInvoke('check_update', { source }),
   openExternal: (url) => tauriInvoke('open_external', { url }),
+  hideWindow: () => tauriInvoke('hide_window'),
+  showWindow: () => tauriInvoke('show_window'),
+  cursorNearWindow: (margin) => tauriInvoke('cursor_near_window', { margin }),
+  previewBoundary: (margin) => tauriInvoke('preview_boundary', { margin }),
+  hideBoundaryPreview: () => tauriInvoke('hide_boundary_preview'),
 };
 
 async function persistSettings(partial) {
@@ -98,6 +103,12 @@ let hls = null;
 let videoElement = null;
 let progressSaverTimer = null;
 let topbarHideTimer = null;
+let bossMode = false;
+let bossPaused = false;
+let bossModeListenersSetup = false;
+let bossModeCheckTimer = null;
+let bossMarginPreviewTimer = null;
+let bossAwaySince = 0;
 
 // ---- DOM shortcuts ---------------------------------------------------------
 const navRailEl = document.getElementById('nav-rail');
@@ -585,6 +596,19 @@ async function showSettings() {
     '<button id="preload-dec" class="btn">减少</button>' +
     '<button id="preload-inc" class="btn">增加</button>' +
     '</div>' +
+    '<div class="info-box" id="boss-margin-info">老板模式边界：' + (settings.bossMargin || 80) + 'px</div>' +
+    '<div class="settings-row">' +
+    '<button id="boss-margin-dec" class="btn">减少</button>' +
+    '<button id="boss-margin-inc" class="btn">增加</button>' +
+    '<button id="boss-margin-preview" class="btn">预览边界</button>' +
+    '</div>' +
+    '<div class="help-text">老板模式下，鼠标移出窗口这个范围才会暂停并隐藏。调整时会实时在窗口外显示黄色虚线边界框。</div>' +
+    '<div class="info-box" id="boss-delay-info">老板模式隐藏延迟：' + Math.round(settings.bossDelayMs || 450) + 'ms</div>' +
+    '<div class="settings-row">' +
+    '<button id="boss-delay-dec" class="btn">减少</button>' +
+    '<button id="boss-delay-inc" class="btn">增加</button>' +
+    '</div>' +
+    '<div class="help-text">老板模式下，鼠标离开边界后等待这段时间才暂停并隐藏。设长一点可以避免误触发。</div>' +
     '<div class="info-box" id="cache-info">视频缓存：加载中...</div>' +
     '<div class="help-text" id="cache-dir">缓存目录：加载中...</div>' +
     '<div class="settings-row">' +
@@ -610,6 +634,11 @@ async function showSettings() {
 
   document.getElementById('preload-dec').addEventListener('click', () => changePreload(-1));
   document.getElementById('preload-inc').addEventListener('click', () => changePreload(1));
+  document.getElementById('boss-margin-dec').addEventListener('click', () => changeBossMargin(-20));
+  document.getElementById('boss-margin-inc').addEventListener('click', () => changeBossMargin(20));
+  document.getElementById('boss-margin-preview').addEventListener('click', previewBossMargin);
+  document.getElementById('boss-delay-dec').addEventListener('click', () => changeBossDelay(-150));
+  document.getElementById('boss-delay-inc').addEventListener('click', () => changeBossDelay(150));
   document.getElementById('cache-clear').addEventListener('click', clearCache);
   document.getElementById('cache-choose').addEventListener('click', chooseCacheDir);
   document.getElementById('history-clear').addEventListener('click', clearHistory);
@@ -635,6 +664,50 @@ async function changePreload(dir) {
   await persistSettings({ preloadMinutes: settings.preloadMinutes });
   updatePreloadInfo();
   showHint('提前缓冲已设为 ' + settings.preloadMinutes + ' 分钟');
+}
+
+function currentBossMargin() {
+  return Math.round(settings.bossMargin || 80);
+}
+
+function updateBossMarginInfo() {
+  const el = document.getElementById('boss-margin-info');
+  if (el) el.textContent = '老板模式边界：' + currentBossMargin() + 'px';
+}
+
+function showBossMarginPreview() {
+  const margin = currentBossMargin();
+  api.previewBoundary(margin).catch(() => {});
+  clearTimeout(bossMarginPreviewTimer);
+  bossMarginPreviewTimer = setTimeout(() => {
+    api.hideBoundaryPreview().catch(() => {});
+  }, 2500);
+}
+
+async function changeBossMargin(dir) {
+  const next = Math.max(20, Math.min(300, currentBossMargin() + dir));
+  await persistSettings({ bossMargin: next });
+  updateBossMarginInfo();
+  showBossMarginPreview();
+}
+
+function previewBossMargin() {
+  showBossMarginPreview();
+}
+
+function currentBossDelay() {
+  return Math.round(settings.bossDelayMs || 450);
+}
+
+function updateBossDelayInfo() {
+  const el = document.getElementById('boss-delay-info');
+  if (el) el.textContent = '老板模式隐藏延迟：' + currentBossDelay() + 'ms';
+}
+
+async function changeBossDelay(dir) {
+  const next = Math.max(0, Math.min(3000, currentBossDelay() + dir));
+  await persistSettings({ bossDelayMs: next });
+  updateBossDelayInfo();
 }
 
 async function clearCache() {
@@ -1004,13 +1077,18 @@ function showPlayer(target) {
     '<div class="player-topbar">' +
     '<button id="player-back" class="player-back-btn">← 返回</button>' +
     '<div class="player-title">' + escapeHtml(target.title) + '</div>' +
+    '<button id="player-pip" class="player-top-btn">画中画</button>' +
+    '<button id="player-boss" class="player-top-btn">老板模式</button>' +
     '</div>' +
     '<video id="video" class="player-video" controls playsinline autoplay></video>' +
     '</div>';
 
   videoElement = document.getElementById('video');
   document.getElementById('player-back').addEventListener('click', () => closePlayer());
+  document.getElementById('player-pip').addEventListener('click', togglePictureInPicture);
+  document.getElementById('player-boss').addEventListener('click', toggleBossMode);
   setupTopbarAutoHide();
+  setupBossMode();
   saveRecentWatch();
   showHint('正在播放：' + target.title);
 
@@ -1081,6 +1159,85 @@ function setupTopbarAutoHide() {
   showTopbar();
 }
 
+// ---- Picture-in-Picture + Boss Mode ----------------------------------------
+
+async function togglePictureInPicture() {
+  if (!videoElement) return;
+  try {
+    if (document.pictureInPictureElement) {
+      await document.exitPictureInPicture();
+    } else {
+      await videoElement.requestPictureInPicture();
+    }
+  } catch (e) {
+    showHint('当前视频不支持画中画');
+  }
+}
+
+function updateBossButton() {
+  const btn = document.getElementById('player-boss');
+  if (btn) {
+    btn.classList.toggle('active', bossMode);
+    btn.textContent = bossMode ? '老板模式：开' : '老板模式';
+  }
+}
+
+function toggleBossMode() {
+  bossMode = !bossMode;
+  bossPaused = false;
+  updateBossButton();
+  showHint(bossMode ? '老板模式已开启：鼠标离开窗口稍远即暂停并隐藏到托盘' : '老板模式已关闭');
+}
+
+function stopBossModeCheck() {
+  clearInterval(bossModeCheckTimer);
+  bossModeCheckTimer = null;
+}
+
+function setupBossMode() {
+  if (bossModeListenersSetup) return;
+  bossModeListenersSetup = true;
+
+  document.addEventListener('mouseleave', () => {
+    if (!bossMode || !videoElement) return;
+    if (videoElement.paused) return;
+    // Don't hide immediately: keep watching the global cursor. Moving onto the
+    // title bar / resize border (to drag or resize) stays within a ring around
+    // the window and should not trigger the hide.
+    stopBossModeCheck();
+    bossAwaySince = 0;
+    bossModeCheckTimer = setInterval(async () => {
+      let near = false;
+      try {
+        near = await api.cursorNearWindow(settings.bossMargin || 80);
+      } catch (e) {
+        near = false;
+      }
+      if (near) {
+        bossAwaySince = 0;
+        return;
+      }
+      const now = Date.now();
+      if (!bossAwaySince) bossAwaySince = now;
+      if (now - bossAwaySince >= (settings.bossDelayMs || 450)) {
+        stopBossModeCheck();
+        if (videoElement && !videoElement.paused) {
+          bossPaused = true;
+          videoElement.pause();
+          api.hideWindow().catch(() => {});
+        }
+      }
+    }, 100);
+  });
+
+  document.addEventListener('mouseenter', () => {
+    stopBossModeCheck();
+    if (!bossMode || !bossPaused || !videoElement) return;
+    bossPaused = false;
+    videoElement.play().catch(() => {});
+  });
+}
+
 function startProgressSaver() {
   clearInterval(progressSaverTimer);
   progressSaverTimer = setInterval(() => {
@@ -1130,6 +1287,10 @@ function destroyPlayer() {
   progressSaverTimer = null;
   clearTimeout(topbarHideTimer);
   topbarHideTimer = null;
+  bossMode = false;
+  bossPaused = false;
+  stopBossModeCheck();
+  updateBossButton();
   if (hls) {
     try {
       hls.destroy();
@@ -1206,12 +1367,15 @@ document.addEventListener('keydown', (e) => {
   if (screen === 'player') {
     if (e.key === 'ArrowLeft') {
       e.preventDefault();
+      e.stopPropagation();
       seekBy(-SEEK_STEP_MS);
     } else if (e.key === 'ArrowRight') {
       e.preventDefault();
+      e.stopPropagation();
       seekBy(SEEK_STEP_MS);
     } else if (e.key === ' ' || e.key === 'Enter') {
       e.preventDefault();
+      e.stopPropagation();
       togglePlayPause();
     }
     return;
@@ -1270,7 +1434,7 @@ document.addEventListener('keydown', (e) => {
       }
     }
   }
-});
+}, true);
 
 function togglePlayPause() {
   if (!videoElement) return;
