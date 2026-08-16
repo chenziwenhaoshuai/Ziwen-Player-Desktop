@@ -449,7 +449,8 @@ pub fn run() {
             }
 
             // Boundary preview overlay (transparent border shown around the
-            // window while adjusting the boss-mode margin).
+            // window while adjusting the boss-mode margin). Kept hidden until
+            // `preview_boundary` is called.
             let _ = WebviewWindowBuilder::new(
                 app,
                 "boundary-preview",
@@ -495,6 +496,20 @@ pub fn run() {
             preview_boundary,
             hide_boundary_preview
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Closing the main window should fully quit the app (and remove the
+            // tray icon), rather than leaving the process running in the tray.
+            if let tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Destroyed,
+                ..
+            } = event
+            {
+                if label == "main" {
+                    app_handle.exit(0);
+                }
+            }
+        });
 }

@@ -596,14 +596,14 @@ async function showSettings() {
     '<button id="preload-dec" class="btn">减少</button>' +
     '<button id="preload-inc" class="btn">增加</button>' +
     '</div>' +
-    '<div class="info-box" id="boss-margin-info">老板模式边界：' + (settings.bossMargin || 80) + 'px</div>' +
+    '<div class="info-box" id="boss-margin-info">老板模式边界：' + (settings.bossMargin ?? 80) + 'px</div>' +
     '<div class="settings-row">' +
     '<button id="boss-margin-dec" class="btn">减少</button>' +
     '<button id="boss-margin-inc" class="btn">增加</button>' +
     '<button id="boss-margin-preview" class="btn">预览边界</button>' +
     '</div>' +
     '<div class="help-text">老板模式下，鼠标移出窗口这个范围才会暂停并隐藏。调整时会实时在窗口外显示黄色虚线边界框。</div>' +
-    '<div class="info-box" id="boss-delay-info">老板模式隐藏延迟：' + Math.round(settings.bossDelayMs || 450) + 'ms</div>' +
+    '<div class="info-box" id="boss-delay-info">老板模式隐藏延迟：' + Math.round(settings.bossDelayMs ?? 450) + 'ms</div>' +
     '<div class="settings-row">' +
     '<button id="boss-delay-dec" class="btn">减少</button>' +
     '<button id="boss-delay-inc" class="btn">增加</button>' +
@@ -667,7 +667,7 @@ async function changePreload(dir) {
 }
 
 function currentBossMargin() {
-  return Math.round(settings.bossMargin || 80);
+  return Math.round(settings.bossMargin ?? 80);
 }
 
 function updateBossMarginInfo() {
@@ -696,7 +696,7 @@ function previewBossMargin() {
 }
 
 function currentBossDelay() {
-  return Math.round(settings.bossDelayMs || 450);
+  return Math.round(settings.bossDelayMs ?? 450);
 }
 
 function updateBossDelayInfo() {
@@ -1209,7 +1209,7 @@ function setupBossMode() {
     bossModeCheckTimer = setInterval(async () => {
       let near = false;
       try {
-        near = await api.cursorNearWindow(settings.bossMargin || 80);
+        near = await api.cursorNearWindow(settings.bossMargin ?? 80);
       } catch (e) {
         near = false;
       }
@@ -1219,7 +1219,7 @@ function setupBossMode() {
       }
       const now = Date.now();
       if (!bossAwaySince) bossAwaySince = now;
-      if (now - bossAwaySince >= (settings.bossDelayMs || 450)) {
+      if (now - bossAwaySince >= (settings.bossDelayMs ?? 450)) {
         stopBossModeCheck();
         if (videoElement && !videoElement.paused) {
           bossPaused = true;
