@@ -23,11 +23,12 @@ Windows 桌面应用，使用 **Tauri 2**（Rust + 系统 WebView2）重写，�
 | 安装包 | — | **~3.6 MB**（NSIS） |
 
 Tauri 不再打包整套 Chromium，而是使用 Windows 10/11 自带的 WebView2 运行时。
+便携版 exe 完全自包含（已内置 WebView2Loader，可单独拷贝到任意文件夹运行）。
 
 ## 环境要求
 
 - Windows 10 / 11（自带 WebView2）
-- [Rust](https://rustup.rs/)（Windows 上使用 GNU 工具链）
+- [Rust](https://rustup.rs/)（Windows 上使用 GNU 工具链，项目内 `rust-toolchain.toml` 已固定为 `x86_64-pc-windows-gnu`）
 - mingw-w64（GNU 工具链需要 binutils，例如 `dlltool.exe`）
 - [Node.js](https://nodejs.org/)（用于安装 Tauri CLI）
 
@@ -60,8 +61,8 @@ npx tauri build
 构建产物：
 
 ```text
-src-tauri\target\release\ziwen-player.exe                     # 便携版（双击即用）
-src-tauri\target\release\bundle\nsis\Ziwen-Player_1.0.22_x64-setup.exe  # 安装包
+src-tauri\target\x86_64-pc-windows-gnu\release\ziwen-player.exe # 单文件便携版（可独立移动，无需额外 DLL）
+src-tauri\target\x86_64-pc-windows-gnu\release\bundle\nsis\Ziwen-Player_1.0.23_x64-setup.exe # 安装包
 ```
 
 ## 开发运行

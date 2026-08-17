@@ -1,6 +1,6 @@
 [package]
 name = "ziwen-player"
-version = "1.0.22"
+version = "1.0.23"
 description = "Ziwen Player Windows desktop (Tauri)"
 authors = ["Ziwen Chen"]
 edition = "2021"
@@ -35,3 +35,8 @@ url = "2"
 strip = true
 opt-level = "s"
 panic = "abort"
+
+# Vendored webview2-com-sys: loads the 5 WebView2 loader exports at runtime
+# instead of importing WebView2Loader.dll, so the portable exe is self-contained.
+[patch.crates-io]
+webview2-com-sys = { path = "vendor/webview2-com-sys" }
