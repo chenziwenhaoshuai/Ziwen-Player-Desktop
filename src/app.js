@@ -105,6 +105,9 @@ let currentDetailEpisodes = [];
 let currentSources = [];
 let activeSourcePosition = 0;
 let episodeSelectedIndex = 0;
+let currentDetail = null;
+let playerPageFullscreen = false;
+let playRequestId = 0;
 
 let pendingEpisode = null;
 let pendingResumePositionMs = 0;
@@ -838,9 +841,11 @@ async function loadDetail(item) {
 
 function showDetail(detail) {
   screen = 'detail';
+  currentDetail = detail;
   currentDetailEpisodes = detail.episodes;
   activeSourcePosition = 0;
   episodeSelectedIndex = 0;
+  playerPageFullscreen = false;
 
   renderNav(null);
   contentEl.innerHTML =
@@ -849,11 +854,17 @@ function showDetail(detail) {
     '<button id="detail-back" class="btn">返回</button>' +
     '<div class="detail-title">' + escapeHtml(detail.title) + '</div>' +
     '</div>' +
-    '<div class="detail-body">' +
+    '<div class="detail-main">' +
+    '<section id="detail-player-stage" class="detail-player-stage" aria-label="视频播放区"><div class="player-placeholder">正在准备播放...</div></section>' +
+    '<aside class="detail-info">' +
     '<img class="detail-poster" src="' + escapeHtml(imageSrc(detail.poster)) + '" alt="" />' +
-    '<div class="detail-right">' +
+    '<div class="detail-info-copy">' +
     '<div class="detail-meta">' + escapeHtml(detail.meta || '') + '</div>' +
     '<div class="detail-desc">' + escapeHtml(detail.description || '暂无简介') + '</div>' +
+    '</div>' +
+    '</aside>' +
+    '</div>' +
+    '<section class="detail-selection">' +
     '<div class="section-title">线路来源</div>' +
     '<div id="source-row" class="source-row"></div>' +
     '<div class="section-title">剧集</div>' +
@@ -868,7 +879,10 @@ function showDetail(detail) {
   renderSourceRow();
   renderEpisodeGrid();
   hideLoading(detail.episodes.length === 0 ? '没有解析到剧集' : '');
-  if (detail.episodes.length > 0) restoreRecentEpisodeSelection();
+  if (detail.episodes.length > 0) {
+    const initialEpisode = restoreRecentEpisodeSelection();
+    if (initialEpisode) playEpisode(initialEpisode);
+  }
 }
 
 function buildSourceGroups(episodes) {
@@ -962,6 +976,7 @@ function restoreRecentEpisodeSelection() {
     highlightEpisodeSelection();
   }
   if (sel.positionMs > 0) showHint('上次看到 ' + formatTime(sel.positionMs));
+  return currentSources[activeSourcePosition]?.episodes[episodeSelectedIndex] || null;
 }
 
 function findRecentEpisodeSelection() {
@@ -1007,6 +1022,7 @@ function findRecentEpisodeSelection() {
 // ---- Playback --------------------------------------------------------------
 async function playEpisode(episode) {
   if (!episode) return;
+  const requestId = ++playRequestId;
   pendingEpisode = episode;
   pendingResumePositionMs = resumePositionForEpisode(episode);
   const candidates = playbackCandidates(episode);
@@ -1019,6 +1035,7 @@ async function playEpisode(episode) {
     try {
       const target = await api.resolvePlayTarget(candidate);
       if (target.directUrl) {
+        if (requestId !== playRequestId) return;
         pendingEpisode = candidate;
         pendingResumePositionMs = resumePositionForEpisode(candidate);
         hideLoading('');
@@ -1082,31 +1099,33 @@ function resumePositionForEpisode(episode) {
   return sameEpisode ? normalizedRecentPosition(currentVideo.positionMs, currentVideo.durationMs) : 0;
 }
 
-// ---- Native player ---------------------------------------------------------
+// ---- Embedded player -------------------------------------------------------
 function showPlayer(target) {
-  screen = 'player';
-  navRailEl.classList.add('hidden');
+  const stage = document.getElementById('detail-player-stage');
+  if (!stage) return;
+  destroyPlayer();
 
   const directUrl = target.directUrl;
   const referer = refererForPlayback(target);
   const isM3u8 = /\.m3u8($|\?)/i.test(directUrl);
 
-  contentEl.innerHTML =
-    '<div class="player">' +
-    '<div class="player-topbar">' +
-    '<button id="player-back" class="player-back-btn">← 返回</button>' +
-    '<div class="player-title">' + escapeHtml(target.title) + '</div>' +
-    '<button id="player-pip" class="player-top-btn">画中画</button>' +
-    '<button id="player-boss" class="player-top-btn">老板模式</button>' +
-    '</div>' +
+  stage.innerHTML =
+    '<div class="embedded-player">' +
     '<video id="video" class="player-video" controls playsinline autoplay></video>' +
+    '<div class="embedded-player-controls">' +
+    '<div class="embedded-player-title">' + escapeHtml(target.title) + '</div>' +
+    '<button id="player-page-fullscreen" class="player-control-btn" title="页面全屏">页面全屏</button>' +
+    '<button id="player-screen-fullscreen" class="player-control-btn" title="屏幕全屏">屏幕全屏</button>' +
+    '<button id="player-pip" class="player-control-btn" title="画中画">画中画</button>' +
+    '<button id="player-boss" class="player-control-btn" title="老板模式">老板模式</button>' +
+    '</div>' +
     '</div>';
 
   videoElement = document.getElementById('video');
-  document.getElementById('player-back').addEventListener('click', () => closePlayer());
+  document.getElementById('player-page-fullscreen').addEventListener('click', togglePlayerPageFullscreen);
+  document.getElementById('player-screen-fullscreen').addEventListener('click', toggleScreenFullscreen);
   document.getElementById('player-pip').addEventListener('click', togglePictureInPicture);
   document.getElementById('player-boss').addEventListener('click', toggleBossMode);
-  setupTopbarAutoHide();
   setupBossMode();
   saveRecentWatch();
   showHint('正在播放：' + target.title);
@@ -1115,19 +1134,44 @@ function showPlayer(target) {
     setupHls(directUrl, referer);
   } else if (isM3u8 && videoElement.canPlayType('application/vnd.apple.mpegurl')) {
     videoElement.src = proxyUrl(directUrl, referer);
-    videoElement.play().catch(() => {});
+    videoElement.addEventListener('loadedmetadata', resumeAndPlay, { once: true });
   } else {
     videoElement.src = proxyUrl(directUrl, referer);
-    videoElement.addEventListener('loadedmetadata', () => {
-      if (pendingResumePositionMs > 0) {
-        videoElement.currentTime = pendingResumePositionMs / 1000;
-        showHint('从 ' + formatTime(pendingResumePositionMs) + ' 继续播放');
-      }
-      videoElement.play().catch(() => {});
-    });
+    videoElement.addEventListener('loadedmetadata', resumeAndPlay, { once: true });
   }
 
   startProgressSaver();
+}
+
+function resumeAndPlay() {
+  if (!videoElement) return;
+  if (pendingResumePositionMs > 0) {
+    videoElement.currentTime = pendingResumePositionMs / 1000;
+    showHint('从 ' + formatTime(pendingResumePositionMs) + ' 继续播放');
+  }
+  videoElement.play().catch(() => {});
+}
+
+function togglePlayerPageFullscreen() {
+  const detailEl = contentEl.querySelector('.detail');
+  const btn = document.getElementById('player-page-fullscreen');
+  if (!detailEl || !btn) return;
+  playerPageFullscreen = !playerPageFullscreen;
+  detailEl.classList.toggle('player-page-fullscreen', playerPageFullscreen);
+  navRailEl.classList.toggle('hidden', playerPageFullscreen);
+  contentEl.classList.toggle('player-page-fullscreen', playerPageFullscreen);
+  btn.textContent = playerPageFullscreen ? '退出页面全屏' : '页面全屏';
+}
+
+async function toggleScreenFullscreen() {
+  const stage = document.getElementById('detail-player-stage');
+  if (!stage) return;
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await stage.requestFullscreen();
+  } catch (e) {
+    showHint('当前环境不支持屏幕全屏');
+  }
 }
 
 function setupHls(directUrl, referer) {
@@ -1149,7 +1193,7 @@ function setupHls(directUrl, referer) {
   hls.on(window.Hls.Events.ERROR, (_evt, data) => {
     if (data && data.fatal) {
       showHint('播放失败，请换一条 m3u8 线路');
-      closePlayer();
+      destroyPlayer();
     }
   });
 }
@@ -1260,7 +1304,7 @@ function setupBossMode() {
 function startProgressSaver() {
   clearInterval(progressSaverTimer);
   progressSaverTimer = setInterval(() => {
-    if (screen === 'player' && videoElement) {
+    if (screen === 'detail' && videoElement) {
       saveRecentWatch();
     }
   }, PROGRESS_SAVE_INTERVAL_MS);
@@ -1333,12 +1377,7 @@ function destroyPlayer() {
 function closePlayer() {
   saveRecentWatch();
   destroyPlayer();
-  navRailEl.classList.remove('hidden');
-  if (currentVideo) {
-    loadDetail(currentVideo);
-  } else {
-    showCatalog(currentTitle, currentPath);
-  }
+  if (currentDetail) showDetail(currentDetail);
 }
 
 function seekBy(offsetMs) {
@@ -1367,6 +1406,10 @@ function handleBack() {
     return;
   }
   if (screen === 'detail') {
+    if (playerPageFullscreen) {
+      togglePlayerPageFullscreen();
+      return;
+    }
     showCatalog(currentTitle, currentPath);
     return;
   }
@@ -1383,7 +1426,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  if (screen === 'player') {
+  if ((screen === 'player' || screen === 'detail') && videoElement) {
     if (e.key === 'ArrowLeft') {
       e.preventDefault();
       e.stopPropagation();
