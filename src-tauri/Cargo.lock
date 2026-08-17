@@ -4906,7 +4906,7 @@ dependencies = [
 
 [[package]]
 name = "ziwen-player"
-version = "1.0.23"
+version = "1.0.24"
 dependencies = [
  "aes",
  "base64 0.22.1",

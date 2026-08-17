@@ -7,11 +7,30 @@
  * ========================================================================= */
 
 // ---- Tauri IPC bridge (replaces Electron's window.api) ---------------------
-function tauriInvoke(cmd, args) {
-  if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
-    return window.__TAURI__.core.invoke(cmd, args);
+async function tauriInvoke(cmd, args) {
+  if (!(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke)) {
+    throw new Error('Tauri runtime not available');
   }
-  return Promise.reject(new Error('Tauri runtime not available'));
+
+  // The very first IPC calls can race with Rust's `setup()`: the frontend may
+  // run before `app.manage(AppState)` completes, so commands like `get_settings`
+  // reject with "state not managed ...". Retry briefly rather than failing.
+  const invoke = window.__TAURI__.core.invoke.bind(window.__TAURI__.core);
+  let lastErr;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    try {
+      return await invoke(cmd, args);
+    } catch (e) {
+      lastErr = e;
+      const msg = String((e && e.message) || e);
+      if (/state not managed/i.test(msg)) {
+        await new Promise((r) => setTimeout(r, 100 + attempt * 50));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr;
 }
 
 const api = {
@@ -1469,4 +1488,7 @@ function maybeCheckUpdateOnStartup() {
   setTimeout(() => checkUpdate('github'), 1800);
 }
 
-init();
+init().catch((e) => {
+  // Show a visible error rather than a silent black screen if startup fails.
+  showHint('初始化失败：' + (e && e.message ? e.message : e));
+});
